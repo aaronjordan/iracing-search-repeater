@@ -1,11 +1,21 @@
 const crypto = require("crypto");
-const c = require("./config.json");
+const c = require("./constants.js");
+
+/**
+ * The shape of an authorization header.
+ * 
+ * Keyed by cookie name, values are [cookie value string, cookie options object]
+ * 
+ * @typedef AuthHeader
+ * @type {Object<string, [string, Object<string, string>]>}
+
+ */
 
 // gets a pseudo-random id
 const generateLogId = () => crypto.randomBytes(6).toString("base64");
 
 // log to the console if in debug mode
-const debugLog = (message) => c.debug && 
+const debugLog = (message) => c.DEBUG && 
   console.log(typeof message === "string" ? `SR: ${message}` : message);
 
 // format a cookie option from html transit syntax to express syntax
@@ -54,25 +64,57 @@ const parseCookie = (cookie) => {
   };
 };
 
+const DOMAIN_ARG = c.HOSTNAME.includes(":") ? 
+  c.HOSTNAME.slice(0, c.HOSTNAME.indexOf(':')) :
+  `.${c.HOSTNAME}`;
+
 /**
- * Attaches cookies to the response object.
+ * Attaches auth header to the response object as a set-auth header.
  *  
  * @param {Response} res the response object to manipulate
  * @param {string[]} cookieArray the array of set-cookie headers provided by req.headers
+ * @returns {AuthHeader} the object representing the setAuthHeader which was written to headers
  */
-const attachCookies = (res, cookieArray) => {
+const attachAuthHeader = (res, cookieArray) => {
+  const setAuth = {};
+  
   for (const cookie of cookieArray) {
     const {name, value, options} = parseCookie(cookie);
-    if ("domain" in options) delete options.domain // options.domain = c.HOSTNAME.slice(c.HOSTNAME.indexOf('://') + 3);
+    if ("domain" in options) options.domain = DOMAIN_ARG;
     if ("expires" in options) options.expires = new Date(options.expires);
     if ("maxAge" in options) options.maxAge *= 1000;
-    res.cookie(name, value, options);
+    setAuth[name] = [value, options];
+  }
+
+  const authHeaderContent = Buffer.from(JSON.stringify(setAuth), "utf-8").toString("base64url");
+  res.setHeader("Set-Authorization", authHeaderContent);
+  return setAuth;
+};
+
+/**
+ * Gets an auth header from the b64url string in 'Authorization'
+ * @param {Request} req the request to manipulate
+ * @returns {AuthHeader} the parsed authHeader in the request
+ */
+const getAuthHeader = (req) => {
+  if (!req.headers.authorization) return [];
+
+  const b64url = req.headers.authorization;
+  const utf16 = Buffer.from(b64url, 'base64url').toString('utf-8');
+
+  try {
+    const decoded = JSON.parse(utf16);
+    return decoded;
+  } catch (e) {
+    console.error("  Failed to parse authorization header");
+    return [];
   }
 };
 
 module.exports = {
-  attachCookies,
+  attachAuthHeader,
   parseCookie,
   debugLog,
-  generateLogId
+  generateLogId,
+  getAuthHeader
 };

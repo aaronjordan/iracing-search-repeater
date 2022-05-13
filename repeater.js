@@ -1,6 +1,6 @@
 const axios = require("axios");
 const c = require("./constants");
-const {debugLog, generateLogId} = require("./helpers");
+const {getAuthHeader, attachAuthHeader, debugLog, generateLogId} = require("./helpers");
 
 /**
  * Forwards requests to the configured location and passes cookies along as specified
@@ -11,20 +11,22 @@ const {debugLog, generateLogId} = require("./helpers");
  * @param {Function} next call the next middleware for express
  */
 async function useSearchRepeater(req, res, next) {
-  if (typeof req.headers.referer != "string" || req.headers.referer.includes(c.HOSTNAME)) {
-    debugLog("direct call does not forward on searchRepeater");
-    return next();
-  }
+  // always allow headers to be read
+  res.setHeader("Access-Control-Expose-Headers", "*");
+  
+  // handle validate calls without ext. calls.
+  if (req.method == "GET" && req.originalUrl.includes("/validate")) return next();
 
   const requestLogId = generateLogId();
   debugLog(`(${requestLogId}) will forward request:\n\t${req.headers.referer} -> ${c.FORWARDED_LOCATION}`);
-  const cookieEntries = Object.entries(req.cookies);
-  const forwardHeaders = {};
+  const authEntries = Object.entries(getAuthHeader(req));
+  const cookieEntries = authEntries.map(([name, details]) => [name, details[0]]); // drop metadata
 
   const cookie = cookieEntries
     .reduce((jar, entry) => jar + entry.join('=') + '; ', "")
     .slice(0, -2);
 
+  const forwardHeaders = {};
   if (cookie) {
     forwardHeaders.cookie = cookie;
     debugLog(`\tcookies (${cookieEntries.length}) will be forwarded`);
@@ -45,7 +47,7 @@ async function useSearchRepeater(req, res, next) {
 
     debugLog(`(${requestLogId}) success response from server`);
     if (Array.isArray(response.headers['set-cookie'])) {
-      attachCookies(res, response.headers['set-cookie']);
+      attachAuthHeader(res, response.headers['set-cookie']);
     }
 
     const forward = {
@@ -57,12 +59,21 @@ async function useSearchRepeater(req, res, next) {
       },
     };
 
+    if (response.data?.link) {
+      try {
+        const dataRes = await axios.get(response.data.link);
+        forward.data = dataRes.data;
+      } catch (e) {
+        debugLog(`(${requestLogId}) ERROR ${e.response?.status} response from data`);
+      }
+    }
+
     res.status(200).send(forward);
   } catch (e) {
     if (e.response) {
       debugLog(`(${requestLogId}) ERROR ${e.response?.status} response from server`);
       if (Array.isArray(e.response.headers['set-cookie'])) {
-        attachCookies(res, e.response.headers['set-cookie']);
+        attachAuthHeader(res, e.response.headers['set-cookie']);
       }
 
       const forwardError = {
@@ -74,11 +85,11 @@ async function useSearchRepeater(req, res, next) {
         },
       };
 
-      res.status(400).send(forwardError);
+      res.status(e?.response?.status ?? 400).send(forwardError);
     } else {
       debugLog(`(${requestLogId}) Local forwarding error:`);
       console.log(e);
-      
+
       res.sendStatus(500);
     }
   }

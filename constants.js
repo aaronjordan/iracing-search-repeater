@@ -5,4 +5,8 @@ module.exports = {
   PORT: config.port || 9001,
   FORWARDED_LOCATION: config.forwarded_location,
   HOSTNAME: config.hostname,
+  HEADERS: {
+    AUTH: "Authorization",
+    SET_AUTH: "Set-Authorization"
+  }
 };
